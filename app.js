@@ -6,6 +6,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { Sculptable, f32ToB64, b64ToF32 } from './sculpt.js';
+import { RigSystem, JOINT_DEFS, GROUPS, POSES } from './rig.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -56,7 +57,7 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ---------- state
-let body, outfit, sculpt, outfitMat, startTf;
+let body, outfit, sculpt, outfitMat, startTf, rig;
 const undoStack = [], redoStack = [];
 const app = (window.__app = { ready: false, errors: [] });
 
@@ -81,11 +82,17 @@ async function init() {
   outfit.rotation.setFromQuaternion(outfit.quaternion, 'XYZ');
   startTf = getTf();
   buildSliders();
+  rig = new RigSystem({ scene, camera, canvas, body, outfit });
+  buildRigUI();
   restoreLocal();
   setView('reset');
   $('#loading').classList.add('gone');
   app.ready = true;
-  app.info = { bodyTris: body.geometry.index.count / 3, outfitTris: outfit.geometry.index.count / 3, groups: sculpt.G };
+  app.info = { bodyTris: body.geometry.index.count / 3, outfitTris: outfit.geometry.index.count / 3, groups: sculpt.G, joints: JOINT_DEFS.length };
+  app.rig = rig;
+  app.jointScreen = (n) => rig.screenPos(n);
+  app.jointLocal = (n) => rig.local[n].toArray();
+  app.selectJoint = (n) => { rig.select(n); refreshRigSel(); };
 }
 
 // ---------- transform (Placer)
@@ -139,9 +146,9 @@ $$('#tfseg button').forEach((b) => b.addEventListener('click', () => { $$('#tfse
 $('#tfreset').addEventListener('click', () => { pushUndo(); setTf(startTf); saveLocalSoon(); toast('Placement de départ remis'); });
 
 // ---------- undo / redo (snapshot = sculpt positions + transform)
-function snap() { return { pos: sculpt.pos.slice(), tf: getTf() }; }
+function snap() { return { pos: sculpt.pos.slice(), tf: getTf(), rig: rig ? rig.snapshot() : null }; }
 function pushUndo() { if (!sculpt) return; undoStack.push(snap()); if (undoStack.length > 30) undoStack.shift(); redoStack.length = 0; updHist(); }
-function restore(s) { sculpt.setPositions(s.pos); outfit.geometry.boundsTree.refit(); outfit.geometry.computeBoundingSphere(); setTf(s.tf); }
+function restore(s) { sculpt.setPositions(s.pos); outfit.geometry.boundsTree.refit(); outfit.geometry.computeBoundingSphere(); setTf(s.tf); if (rig && s.rig) rig.restoreSnap(s.rig); }
 $('#undo').addEventListener('click', () => { if (!undoStack.length) return; redoStack.push(snap()); restore(undoStack.pop()); updHist(); saveLocalSoon(); autoPen(); });
 $('#redo').addEventListener('click', () => { if (!redoStack.length) return; undoStack.push(snap()); restore(redoStack.pop()); updHist(); saveLocalSoon(); autoPen(); });
 function updHist() { $('#undo').disabled = !undoStack.length; $('#redo').disabled = !redoStack.length; }
@@ -152,13 +159,15 @@ let mode = 'vue';
 $$('#tabs button').forEach((b) => b.addEventListener('click', () => {
   const m = b.dataset.mode, panel = $('#panel');
   if (m === mode) { panel.classList.toggle('folded'); return; }
+  if (mode === 'rig' && rig) rig.setVisible(false);
   mode = m; panel.classList.remove('folded');
   $$('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
   $$('.pane').forEach((p) => (p.hidden = p.dataset.pane !== m));
+  if (mode === 'rig' && rig) { rig.setVisible(true); refreshRigSel(); }
   applyCamLock();
 }));
 $('#fold').addEventListener('click', () => $('#panel').classList.toggle('folded'));
-$$('#views button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+$$('#views button').forEach((b) => b.addEventListener('click', () => { setView(b.dataset.view); if (mode === 'rig') refreshDepthSlider(); }));
 
 let tool = 'gonfler', sym = true, camLocked = false;
 $$('#tools button').forEach((b) => b.addEventListener('click', () => { tool = b.dataset.tool; $$('#tools button').forEach((x) => x.classList.toggle('on', x === b)); }));
@@ -207,9 +216,33 @@ function placeRings(hit) {
   } else rings[1].visible = false;
 }
 
+const pointerXY = new Map();
+let rigDepth = null;
 canvas.addEventListener('pointerdown', (e) => {
   pointers.add(e.pointerId);
+  pointerXY.set(e.pointerId, [e.clientX, e.clientY]);
   if (stroke) { e.stopImmediatePropagation(); return; }
+  if (mode === 'rig' && rig) {
+    if (pointers.size >= 2 && rig.selected && !rig.testing) {
+      e.stopImmediatePropagation(); e.preventDefault();
+      if (rig._drag) rig.endDrag();
+      const ys = [...pointerXY.values()].map((p) => p[1]);
+      rigDepth = { y0: ys.reduce((a, b) => a + b, 0) / ys.length, d0: rig.getDepth() };
+      controls.enabled = false;
+      return;
+    }
+    const hit = rig.hitTest(e.clientX, e.clientY);
+    if (hit && pointers.size === 1) {
+      e.stopImmediatePropagation(); e.preventDefault();
+      if (rig.testing) { rig.exitTester(); refreshPoseBtns(); }
+      canvas.setPointerCapture(e.pointerId);
+      pushUndo();
+      rig.select(hit);
+      refreshRigSel();
+      rig.beginDrag(e.clientX, e.clientY);
+      return;
+    }
+  }
   if (mode !== 'sculpter' || pointers.size > 1 || !sculpt) return;
   const hit = hitOutfit(e.clientX, e.clientY);
   if (!hit) return;
@@ -229,6 +262,23 @@ canvas.addEventListener('pointerdown', (e) => {
 }, { capture: true });
 
 canvas.addEventListener('pointermove', (e) => {
+  if (pointerXY.has(e.pointerId)) pointerXY.set(e.pointerId, [e.clientX, e.clientY]);
+  if (rigDepth && rig && rig.selected) {
+    e.stopImmediatePropagation();
+    const ys = [...pointerXY.values()].map((p) => p[1]);
+    if (ys.length) {
+      const y = ys.reduce((a, b) => a + b, 0) / ys.length;
+      rig.setDepth(rigDepth.d0 + (y - rigDepth.y0) * 0.00045);
+      refreshDepthSlider();
+    }
+    return;
+  }
+  if (rig && rig._drag) {
+    e.stopImmediatePropagation();
+    rig.dragTo(e.clientX, e.clientY);
+    refreshDepthSlider();
+    return;
+  }
   if (!stroke || e.pointerId !== stroke.id) return;
   e.stopImmediatePropagation();
   stroke.x = e.clientX; stroke.y = e.clientY; stroke.moved = true;
@@ -247,6 +297,11 @@ canvas.addEventListener('pointermove', (e) => {
 
 function endStroke(e) {
   pointers.delete(e.pointerId);
+  pointerXY.delete(e.pointerId);
+  if (rigDepth && pointerXY.size < 2) {
+    rigDepth = null; controls.enabled = true; saveLocalSoon();
+  }
+  if (rig && rig._drag) { rig.endDrag(); saveLocalSoon(); }
   if (!stroke || e.pointerId !== stroke.id) return;
   e.stopImmediatePropagation();
   if (tool === 'tirer') sculpt.grabEnd();
@@ -308,6 +363,7 @@ function saveLocalSoon() { clearTimeout(saveT); saveT = setTimeout(saveLocal, 40
 function stateObj(withRest) {
   const s = { v: 1, app: 'apot_fit', groups: sculpt.G, tf: getTf(), m: outfit.matrix.toArray(), pos: f32ToB64(sculpt.pos), date: new Date().toISOString() };
   if (withRest) { s.rest = f32ToB64(sculpt.rest); s.space = 'glTF Y-up, local space of the outfit mesh (= Meshy tenue v10 local space). m = column-major node matrix in the scene, body node at its own TRS.'; s.bodyMatrix = body.matrix.toArray(); }
+  if (rig) s.rig = rig.toJSON();
   return s;
 }
 function saveLocal() {
@@ -315,12 +371,14 @@ function saveLocal() {
   catch (err) { toast('Sauvegarde locale impossible : ' + err.message, 3000); }
 }
 function restoreLocal() {
-  const raw = localStorage.getItem(LS_KEY); if (!raw) return;
+  const raw = localStorage.getItem(LS_KEY); if (!raw) { if (rig) rig.estimate(); return; }
   try {
     const s = JSON.parse(raw);
     if (s.groups !== sculpt.G) return toast('Ancienne sauvegarde incompatible, ignorée', 3000);
     sculpt.setPositions(b64ToF32(s.pos)); outfit.geometry.boundsTree.refit(); outfit.geometry.computeBoundingSphere();
-    setTf(s.tf); toast('Sauvegarde reprise', 2200);
+    setTf(s.tf);
+    if (rig) { if (s.rig) { if (!rig.load(s.rig)) rig.estimate(); } else rig.estimate(); }
+    toast('Sauvegarde reprise', 2200);
   } catch (err) { console.warn('restore failed', err); }
 }
 const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; };
@@ -356,8 +414,124 @@ $('#resetall').addEventListener('click', () => {
   if (!confirm('Effacer toutes les modifications et la sauvegarde ?')) return;
   pushUndo(); sculpt.setPositions(sculpt.rest); outfit.geometry.boundsTree.refit(); setTf(startTf); localStorage.removeItem(LS_KEY);
   body.geometry.attributes.color.array.fill(1); body.geometry.attributes.color.needsUpdate = true; $('#penres').textContent = '';
+  if (rig) { rig.resetPose(); rig.estimate(); }
   $('#savedlg').close(); toast('Tout est revenu au départ');
 });
+
+
+// ---------- Rig mode UI
+const FINGER_TABS = [
+  { id: '', label: 'Tous' },
+  { id: 'hand', label: 'Main' },
+  { id: 'thumb', label: 'Pouce' },
+  { id: 'index', label: 'Index' },
+  { id: 'middle', label: 'Majeur' },
+  { id: 'ring', label: 'Annulaire' },
+  { id: 'pinky', label: 'Auriculaire' },
+];
+let jGroup = 'tete', jFinger = '';
+function buildRigUI() {
+  const box = $('#jgroups'); box.innerHTML = '';
+  for (const g of GROUPS) {
+    const b = document.createElement('button'); b.textContent = g.label; b.dataset.g = g.id;
+    b.addEventListener('click', () => { jGroup = g.id; jFinger = ''; renderJointPicker(); });
+    box.appendChild(b);
+  }
+  const poses = $('#poses'); poses.innerHTML = '';
+  for (const p of POSES) {
+    const b = document.createElement('button'); b.textContent = p.label; b.dataset.pose = p.id;
+    b.addEventListener('click', () => applyPose(p.id));
+    poses.appendChild(b);
+  }
+  $('#rigsym').addEventListener('click', (e) => { rig.sym = !rig.sym; e.currentTarget.classList.toggle('on', rig.sym); });
+  $('#rigoutfit').addEventListener('click', (e) => {
+    rig.setOutfitMode(rig.outfitMode === 'ghost' ? 'hidden' : 'ghost');
+    e.currentTarget.classList.toggle('on', rig.outfitMode === 'ghost');
+    e.currentTarget.textContent = rig.outfitMode === 'ghost' ? 'Tenue en transparent' : 'Tenue cachée';
+  });
+  const dinp = $('#rigdepth');
+  dinp.addEventListener('pointerdown', () => { if (rig.selected) pushUndo(); });
+  dinp.addEventListener('input', () => { rig.setDepth(+dinp.value); refreshDepthSlider(false); });
+  dinp.addEventListener('change', () => saveLocalSoon());
+  $('#rigcenter').addEventListener('click', () => {
+    if (!rig.selected) return toast('Choisis d\'abord une articulation');
+    if (rig.testing) { rig.exitTester(); refreshPoseBtns(); }
+    pushUndo();
+    if (!rig.centerInVolume()) toast('Pas de volume sous ce rayon');
+    else { refreshDepthSlider(); saveLocalSoon(); toast('Centrée dans le volume'); }
+  });
+  $('#rigreset').addEventListener('click', () => { pushUndo(); if (rig.testing) rig.exitTester(); rig.estimate(); refreshRigSel(); refreshPoseBtns(); saveLocalSoon(); toast('Positions estimées depuis le corps'); });
+  $('#poseamp').addEventListener('input', () => {
+    $('#poseampv').textContent = $('#poseamp').value + ' %';
+    if (rig.testing && rig.poseId !== 'repos') rig.setPose(rig.poseId, +$('#poseamp').value / 100);
+  });
+  rig.onSelect = () => refreshRigSel();
+  renderJointPicker();
+  refreshPoseBtns();
+}
+function renderJointPicker() {
+  $$('#jgroups button').forEach((b) => b.classList.toggle('on', b.dataset.g === jGroup));
+  const isHand = jGroup === 'mainL' || jGroup === 'mainR';
+  const sub = $('#jsub'); sub.hidden = !isHand;
+  if (isHand) {
+    sub.innerHTML = '';
+    for (const t of FINGER_TABS) {
+      const b = document.createElement('button'); b.textContent = t.label;
+      b.classList.toggle('on', jFinger === t.id);
+      b.addEventListener('click', () => { jFinger = t.id; renderJointPicker(); });
+      sub.appendChild(b);
+    }
+  }
+  const list = $('#jlist'); list.innerHTML = '';
+  const joints = JOINT_DEFS.filter((j) => {
+    if (j.group !== jGroup) return false;
+    if (isHand && jFinger) {
+      if (jFinger === 'hand') return j.name.startsWith('hand.');
+      return j.finger === true && j.fingerId === jFinger;
+    }
+    return true;
+  });
+  for (const j of joints) {
+    const b = document.createElement('button'); b.textContent = j.label;
+    b.classList.toggle('on', rig && rig.selected === j.name);
+    b.addEventListener('click', () => { if (rig.testing) { rig.exitTester(); refreshPoseBtns(); } rig.select(j.name); refreshRigSel(); });
+    list.appendChild(b);
+  }
+}
+function refreshRigSel() {
+  const n = rig && rig.selected;
+  const def = n ? JOINT_DEFS.find((j) => j.name === n) : null;
+  $('#rigsel').textContent = def ? ('Sélection : ' + def.label) : 'Aucune articulation sélectionnée';
+  if (def && def.group !== jGroup) { jGroup = def.group; jFinger = def.fingerId || ''; }
+  renderJointPicker();
+  refreshDepthSlider();
+}
+function refreshDepthSlider(sync = true) {
+  const inp = $('#rigdepth'), out = $('#rigdepthv');
+  if (!rig || !rig.selected) { inp.disabled = true; out.textContent = '—'; return; }
+  const r = rig.depthRange();
+  inp.disabled = false;
+  inp.min = r.min; inp.max = r.max; inp.step = 0.001;
+  if (sync) inp.value = rig.getDepth();
+  out.textContent = ((+inp.value - (r.min + r.max) / 2) * 100).toFixed(1) + ' cm';
+}
+function refreshPoseBtns() {
+  $$('#poses button').forEach((b) => b.classList.toggle('on', rig && rig.poseId === b.dataset.pose));
+  const show = rig && rig.testing && rig.poseId !== 'repos';
+  $('#poseamprow').hidden = !show;
+}
+function applyPose(id) {
+  if (id === 'repos') {
+    rig.resetPose();
+    refreshPoseBtns();
+    toast('Retour à la pose de repos');
+    return;
+  }
+  const ms = rig.buildPreview();
+  rig.setPose(id, +$('#poseamp').value / 100);
+  refreshPoseBtns();
+  toast(`Aperçu « ${POSES.find((p) => p.id === id).label} » (${ms} ms)`);
+}
 
 // keep Apot centred in the part of the screen the panel does not cover
 let vo = '';
@@ -371,6 +545,6 @@ function updateViewOffset() {
   camera.setViewOffset(W, H, Math.round(x), Math.round(y), W, H);
 }
 // ---------- loop
-renderer.setAnimationLoop(() => { updateViewOffset(); strokeFrame(); controls.update(); renderer.render(scene, camera); });
+renderer.setAnimationLoop(() => { updateViewOffset(); strokeFrame(); if (rig && rig.testing) rig.updateTestingMarkers(); controls.update(); renderer.render(scene, camera); });
 addEventListener('error', (e) => app.errors.push(String(e.message)));
 init().catch((err) => { console.error(err); $('#loadmsg').textContent = 'Erreur de chargement : ' + err.message; app.errors.push(String(err)); });

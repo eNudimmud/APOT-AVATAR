@@ -24,6 +24,7 @@
     <button data-mode="vue" class="on">👁<span>Vue</span></button>
     <button data-mode="placer">✋<span>Placer</span></button>
     <button data-mode="sculpter">🖌<span>Sculpter</span></button>
+    <button data-mode="rig">🦴<span>Rig</span></button>
     <button data-mode="affichage">◐<span>Affichage</span></button>
   </nav>
 
@@ -45,7 +46,7 @@
 
     <div class="pane" data-pane="vue">
       <p class="hint"><b>1 doigt</b> : tourner · <b>pincer</b> : zoom · <b>2 doigts</b> : déplacer la vue.</p>
-      <p class="hint">Choisis <b>Placer</b> pour bouger la tenue, <b>Sculpter</b> pour la déformer.</p>
+      <p class="hint">Choisis <b>Placer</b> pour bouger la tenue, <b>Sculpter</b> pour la déformer, <b>Rig</b> pour placer les articulations.</p>
     </div>
 
     <div class="pane" data-pane="placer" hidden>
@@ -69,6 +70,27 @@
       <p class="hint small">Pose le doigt <b>sur la tenue</b> pour sculpter, à côté pour tourner. « 🔒 Caméra » : le doigt ne fait plus tourner.</p>
     </div>
 
+
+    <div class="pane" data-pane="rig" hidden>
+      <p class="hint" id="righint"><b>1 doigt</b> sur une sphère : la choisir et la glisser dans le plan de l'écran. <b>2 doigts</b> de haut en bas : profondeur. La liste ci-dessous sert pour les petites articulations des doigts.</p>
+      <p class="sel" id="rigsel">Aucune articulation sélectionnée</p>
+      <div class="toggles">
+        <button id="rigsym" class="tog on">⇋ Symétrie X</button>
+        <button id="rigoutfit" class="tog on">Tenue en transparent</button>
+      </div>
+      <label class="row"><span>Profondeur</span><input id="rigdepth" type="range" min="0" max="1000" step="1" value="500" disabled><output id="rigdepthv">—</output></label>
+      <button id="rigcenter" class="wide">Centrer dans le volume</button>
+      <div class="jgroups" id="jgroups"></div>
+      <div class="jsub" id="jsub" hidden></div>
+      <div class="jlist" id="jlist"></div>
+      <div class="toggles">
+        <button id="rigreset" class="ghost">Réinitialiser les positions</button>
+      </div>
+      <h3 class="subh">Tester la déformation</h3>
+      <p class="hint small">Les curseurs bougent le squelette pour voir comment le corps et la tenue suivent. <b>Repos</b> revient à la pose en A.</p>
+      <div class="poses" id="poses"></div>
+      <label class="row" id="poseamprow" hidden><span>Amplitude</span><input id="poseamp" type="range" min="0" max="100" step="1" value="100"><output id="poseampv">100 %</output></label>
+    </div>
     <div class="pane" data-pane="affichage" hidden>
       <div class="toggles">
         <button id="showbody" class="tog on">Corps visible</button>

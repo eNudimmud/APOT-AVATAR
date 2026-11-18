@@ -11,8 +11,8 @@ button.danger { background:#4a2422; color:#ffb4ad; }
 button.ghost { background:transparent; border:1px solid #3a414d; }
 button:disabled { opacity:.35; }
 #tabs { position:absolute; top:calc(env(safe-area-inset-top) + 8px); left:8px; right:8px; display:flex; gap:6px; z-index:3; }
-#tabs button { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:56px; font-size:20px; background:#232832e6; }
-#tabs button span { font-size:13px; margin-top:2px; }
+#tabs button { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:56px; font-size:18px; background:#232832e6; padding:0 4px; }
+#tabs button span { font-size:12px; margin-top:2px; }
 #tabs button.on { background:var(--on); }
 #views { position:absolute; top:calc(env(safe-area-inset-top) + 72px); left:8px; display:flex; flex-direction:column; gap:6px; z-index:3; }
 #views button { min-width:64px; background:#232832d9; font-size:14px; }
@@ -59,6 +59,18 @@ dialog h2 { margin:0 0 6px; font-size:20px; }
 @media (min-width: 760px) {
   #panel { left:auto; top:calc(env(safe-area-inset-top) + 72px); right:72px; bottom:auto; width:360px; max-height:calc(100% - 96px); border-radius:18px; }
   #panel.folded { transform:translateX(calc(100% + 80px)); }
-  #tabs { right:auto; width:440px; }
+  #tabs { right:auto; width:520px; }
   #fold { display:none; }
+}
+
+.sel { margin:4px 0 8px; font-weight:600; color:var(--acc); min-height:28px; }
+.subh { font-size:15px; margin:12px 0 4px; color:var(--fg); font-weight:600; }
+.jgroups, .jsub, .jlist, .poses { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.jgroups button, .jsub button, .jlist button, .poses button { flex:1 1 auto; min-width:72px; min-height:48px; padding:0 10px; font-size:14px; }
+.jlist button { min-width:96px; }
+.jlist button.on, .jgroups button.on, .jsub button.on, .poses button.on { background:var(--on); }
+#poseamprow { margin-top:4px; }
+@media (max-width: 420px) {
+  #tabs button span { font-size:11px; }
+  #tabs button { min-height:52px; font-size:16px; }
 }
