@@ -57,7 +57,7 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ---------- state
-let body, outfit, sculpt, outfitMat, startTf, rig;
+let body, outfit, sculpt, outfitMat, startTf, meshyTf, defaultState, rig;
 const undoStack = [], redoStack = [];
 const app = (window.__app = { ready: false, errors: [] });
 
@@ -80,7 +80,9 @@ async function init() {
   outfit.geometry.computeBoundsTree();
   sculpt = new Sculptable(outfit);
   outfit.rotation.setFromQuaternion(outfit.quaternion, 'XYZ');
-  startTf = getTf();
+  meshyTf = getTf();
+  defaultState = await loadDefaultState();
+  startTf = defaultState && defaultState.tf ? cloneTf(defaultState.tf) : cloneTf(meshyTf);
   buildSliders();
   rig = new RigSystem({ scene, camera, canvas, body, outfit });
   buildRigUI();
@@ -359,7 +361,7 @@ $('#pen').addEventListener('click', () => { const r = computePen(); toast(`${r.p
 
 // ---------- save / load / export
 let saveT;
-function saveLocalSoon() { clearTimeout(saveT); saveT = setTimeout(saveLocal, 400); }
+function saveLocalSoon() { clearTimeout(saveT); saveT = setTimeout(saveLocal, 1000); }
 function stateObj(withRest) {
   const s = { v: 1, app: 'apot_fit', groups: sculpt.G, tf: getTf(), m: outfit.matrix.toArray(), pos: f32ToB64(sculpt.pos), date: new Date().toISOString() };
   if (withRest) { s.rest = f32ToB64(sculpt.rest); s.space = 'glTF Y-up, local space of the outfit mesh (= Meshy tenue v10 local space). m = column-major node matrix in the scene, body node at its own TRS.'; s.bodyMatrix = body.matrix.toArray(); }
@@ -370,16 +372,50 @@ function saveLocal() {
   try { localStorage.setItem(LS_KEY, JSON.stringify(stateObj(false))); app.savedAt = Date.now(); $('#savestatus').textContent = 'Sauvegardé dans ce navigateur à ' + new Date().toLocaleTimeString('fr-CH', { hour: '2-digit', minute: '2-digit' }) + '.'; }
   catch (err) { toast('Sauvegarde locale impossible : ' + err.message, 3000); }
 }
-function restoreLocal() {
-  const raw = localStorage.getItem(LS_KEY); if (!raw) { if (rig) rig.estimate(); return; }
+function cloneTf(t) { return { p: t.p.slice(), r: t.r.slice(), su: t.su, s: t.s.slice() }; }
+async function loadDefaultState() {
   try {
-    const s = JSON.parse(raw);
-    if (s.groups !== sculpt.G) return toast('Ancienne sauvegarde incompatible, ignorée', 3000);
-    sculpt.setPositions(b64ToF32(s.pos)); outfit.geometry.boundsTree.refit(); outfit.geometry.computeBoundingSphere();
-    setTf(s.tf);
-    if (rig) { if (s.rig) { if (!rig.load(s.rig)) rig.estimate(); } else rig.estimate(); }
-    toast('Sauvegarde reprise', 2200);
-  } catch (err) { console.warn('restore failed', err); }
+    const r = await fetch('assets/default_state.json');
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (err) { console.warn('default_state missing', err); return null; }
+}
+function applyFitState(s) {
+  if (!s || typeof s !== 'object') throw new Error('État invalide');
+  if (s.groups !== sculpt.G) throw new Error('Cet état ne correspond pas à ce modèle');
+  if (typeof s.pos !== 'string') throw new Error('État incomplet (pas de sculpture)');
+  sculpt.setPositions(b64ToF32(s.pos));
+  outfit.geometry.boundsTree.refit();
+  outfit.geometry.computeBoundingSphere();
+  if (s.tf) setTf(s.tf);
+  if (rig) {
+    if (s.rig) { if (!rig.load(s.rig)) rig.estimate(); }
+    else rig.estimate();
+  }
+  markPenStale();
+}
+function applyDefaultFit(quiet) {
+  if (!defaultState) { sculpt.setPositions(sculpt.rest); outfit.geometry.boundsTree.refit(); setTf(meshyTf || startTf); if (rig) rig.estimate(); return false; }
+  applyFitState(defaultState);
+  if (!quiet) toast('Ajustement V2 chargé');
+  return true;
+}
+function restoreLocal() {
+  const raw = localStorage.getItem(LS_KEY);
+  if (raw) {
+    try {
+      const s = JSON.parse(raw);
+      if (s.groups !== sculpt.G) throw new Error('groups');
+      applyFitState(s);
+      toast('Sauvegarde reprise', 2200);
+      return;
+    } catch (err) {
+      console.warn('restore failed', err);
+      toast('Sauvegarde locale illisible, ajustement V2 chargé', 3000);
+    }
+  }
+  applyDefaultFit(true);
+  saveLocal();
 }
 const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; };
 function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
@@ -401,6 +437,7 @@ app.probe = (y = 0.33) => { // screen point of the outfit front at height y (tes
   return { x, y: yy, world: h.point.toArray(), onCanvas: document.elementFromPoint(x, yy) === canvas };
 };
 app.exportGLB = exportGLB; app.computePen = computePen; app.state = () => stateObj(true);
+app.getTf = getTf; app.setTf = (tf) => { setTf(tf); saveLocalSoon(); }; app.saveNow = saveLocal;
 $('#save').addEventListener('click', () => { saveLocal(); $('#savedlg').showModal(); });
 $('#closedlg').addEventListener('click', () => $('#savedlg').close());
 $('#dlglb').addEventListener('click', async (e) => {
@@ -411,12 +448,44 @@ $('#dlglb').addEventListener('click', async (e) => {
 });
 $('#dljson').addEventListener('click', () => download(new Blob([JSON.stringify(stateObj(true))], { type: 'application/json' }), `apot_tenue_etat_${stamp()}.json`));
 $('#resetall').addEventListener('click', () => {
-  if (!confirm('Effacer toutes les modifications et la sauvegarde ?')) return;
-  pushUndo(); sculpt.setPositions(sculpt.rest); outfit.geometry.boundsTree.refit(); setTf(startTf); localStorage.removeItem(LS_KEY);
+  if (!confirm('Revenir à l’ajustement V2 (celui que tu as validé) ?')) return;
+  pushUndo();
+  if (rig && rig.testing) rig.exitTester();
+  applyDefaultFit(false);
   body.geometry.attributes.color.array.fill(1); body.geometry.attributes.color.needsUpdate = true; $('#penres').textContent = '';
-  if (rig) { rig.resetPose(); rig.estimate(); }
-  $('#savedlg').close(); toast('Tout est revenu au départ');
+  saveLocal();
+  $('#savedlg').close();
 });
+$('#resetmeshy').addEventListener('click', () => {
+  if (!confirm('Remettre la tenue telle que Meshy l’a livrée, sans tes ajustements ?')) return;
+  pushUndo();
+  if (rig && rig.testing) rig.exitTester();
+  sculpt.setPositions(sculpt.rest); outfit.geometry.boundsTree.refit(); outfit.geometry.computeBoundingSphere();
+  setTf(meshyTf || startTf);
+  if (rig) rig.estimate();
+  body.geometry.attributes.color.array.fill(1); body.geometry.attributes.color.needsUpdate = true; $('#penres').textContent = '';
+  saveLocal();
+  $('#savedlg').close(); toast('Tenue d’origine Meshy rétablie');
+});
+$('#openstate').addEventListener('click', () => $('#openfile').click());
+$('#openfile').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const s = JSON.parse(await f.text());
+    pushUndo();
+    if (rig && rig.testing) rig.exitTester();
+    applyFitState(s);
+    saveLocal();
+    $('#savedlg').close();
+    toast('État ouvert : ' + (f.name || 'fichier'));
+  } catch (err) {
+    toast('Impossible d’ouvrir ce fichier : ' + err.message, 3500);
+  }
+});
+addEventListener('pagehide', () => { if (!sculpt) return; clearTimeout(saveT); saveLocal(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && sculpt) { clearTimeout(saveT); saveLocal(); } });
 
 
 // ---------- Rig mode UI
