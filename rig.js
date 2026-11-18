@@ -1,5 +1,6 @@
 // Manual joint placement + lightweight skinning preview for the Apot fit app.
 import * as THREE from 'three';
+import { computeSkinWeights, palmFrame, fingerAxis } from './weights.js';
 
 const FINGERS = [
   { id: 'thumb',  label: 'Pouce' },
@@ -660,46 +661,36 @@ export class RigSystem {
     rigRoot.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(boneList);
 
-    // bone segments in WORLD for weighting
+    const jointsW = {};
     const segs = [];
     for (const j of JOINT_DEFS) {
       const a = this.localToWorld(j.name, new THREE.Vector3());
+      jointsW[j.name] = a.toArray();
       const c = PRIMARY_CHILD[j.name];
       const b = c ? this.localToWorld(c, new THREE.Vector3()) : this.body.localToWorld(tailOf(j.name));
       const ab = b.clone().sub(a);
       const len2 = ab.lengthSq() || 1e-8;
-      segs.push({ i: JOINT_INDEX[j.name], name: j.name, a, ab, len2 });
+      segs.push({ i: JOINT_INDEX[j.name], name: j.name, a: a.toArray(), ab: ab.toArray(), len2 });
     }
-    const neckWorldY = this.localToWorld('neck', new THREE.Vector3()).y;
-    const hipWorldY = this.localToWorld('hips', new THREE.Vector3()).y;
 
     const skinMesh = (mesh) => {
       const pos = mesh.geometry.attributes.position;
       const n = pos.count;
-      const idx = new Uint16Array(n * 4);
-      const wgt = new Float32Array(n * 4);
+      const world = new Float32Array(n * 3);
       const mw = mesh.matrixWorld;
       const v = new THREE.Vector3();
       for (let i = 0; i < n; i++) {
         v.fromBufferAttribute(pos, i).applyMatrix4(mw);
-        const vx = v.x, vy = v.y, vz = v.z;
-        let d1 = Infinity, d2 = Infinity, i1 = 0, i2 = 0;
-        const inHead = vy > neckWorldY + 0.015;
-        const inLegs = vy < hipWorldY - 0.01;
-        for (const s of segs) {
-          if (inHead && !/^head|neck|chest$/.test(s.name)) continue;
-          if (inLegs && !/hips|thigh|shin|foot|toe/.test(s.name)) continue;
-          let t = ((vx - s.a.x) * s.ab.x + (vy - s.a.y) * s.ab.y + (vz - s.a.z) * s.ab.z) / s.len2;
-          if (t < 0) t = 0; else if (t > 1) t = 1;
-          const dx = vx - (s.a.x + s.ab.x * t), dy = vy - (s.a.y + s.ab.y * t), dz = vz - (s.a.z + s.ab.z * t);
-          const d = dx * dx + dy * dy + dz * dz;
-          if (d < d1) { d2 = d1; i2 = i1; d1 = d; i1 = s.i; }
-          else if (d < d2) { d2 = d; i2 = s.i; }
-        }
-        const w1 = 1 / (d1 + 1e-8), w2 = 1 / (d2 + 1e-8), ws = w1 + w2;
-        idx[4 * i] = i1; idx[4 * i + 1] = i2; idx[4 * i + 2] = 0; idx[4 * i + 3] = 0;
-        wgt[4 * i] = w1 / ws; wgt[4 * i + 1] = w2 / ws; wgt[4 * i + 2] = 0; wgt[4 * i + 3] = 0;
+        world[3 * i] = v.x; world[3 * i + 1] = v.y; world[3 * i + 2] = v.z;
       }
+      const { skinIndex: idx, skinWeight: wgt } = computeSkinWeights({
+        positions: world,
+        index: mesh.geometry.index ? mesh.geometry.index.array : null,
+        joints: jointsW,
+        segments: segs,
+        maxInfluences: 4,
+        blend: 0.035,
+      });
       const geo = mesh.geometry;
       geo.setAttribute('skinIndex', new THREE.BufferAttribute(idx, 4));
       geo.setAttribute('skinWeight', new THREE.BufferAttribute(wgt, 4));
@@ -798,10 +789,12 @@ export class RigSystem {
     };
     // World-space rotations (more stable than local axes after auto-aim).
     if (id === 'bras_leves') {
-      rotWorld('upper_arm.L', 0, 0, 1, 2.15);
-      rotWorld('upper_arm.R', 0, 0, 1, -2.15);
-      rotWorld('forearm.L', 0, 0, 1, 0.25);
-      rotWorld('forearm.R', 0, 0, 1, -0.25);
+      // Raise forward/up (axis tilted in front of the coronal plane) so the arms
+      // come up in front of the body, not in a flat T.
+      rotWorld('upper_arm.L', 0.45, 0, 1, 1.85);
+      rotWorld('upper_arm.R', 0.45, 0, -1, 1.85);
+      rotWorld('forearm.L', 0.45, 0, 1, 0.35);
+      rotWorld('forearm.R', 0.45, 0, -1, 0.35);
     } else if (id === 'accroupi') {
       rotWorld('thigh.L', 1, 0, 0, -1.35); rotWorld('thigh.R', 1, 0, 0, -1.35);
       rotWorld('shin.L', 1, 0, 0, 1.7); rotWorld('shin.R', 1, 0, 0, 1.7);
@@ -811,14 +804,17 @@ export class RigSystem {
       rotWorld('neck', 0, 1, 0, 0.7);
       rotWorld('head', 0, 1, 0, 0.45);
     } else if (id === 'poing_ferme') {
+      const pj = {};
+      for (const j of JOINT_DEFS) pj[j.name] = this.localToWorld(j.name, new THREE.Vector3()).toArray();
       for (const S of ['L', 'R']) {
-        const s = S === 'L' ? 1 : -1;
+        const palm = palmFrame(pj, S);
+        if (!palm) continue;
         for (const f of FINGERS) {
-          const curl = f.id === 'thumb' ? 0.55 : 1;
-          // curl around the bone's local side axis ≈ world Z for A-pose hands pointing out
-          rotWorld(`${f.id}.01.${S}`, 0, 0, 1, s * 0.8 * curl);
-          rotWorld(`${f.id}.02.${S}`, 0, 0, 1, s * 1.2 * curl);
-          rotWorld(`${f.id}.03.${S}`, 0, 0, 1, s * 0.9 * curl);
+          const axis = fingerAxis(pj, f.id, S, palm) || palm.axis;
+          const curl = f.id === 'thumb' ? 0.75 : 1;
+          rotWorld(`${f.id}.01.${S}`, axis[0], axis[1], axis[2], 0.85 * curl);
+          rotWorld(`${f.id}.02.${S}`, axis[0], axis[1], axis[2], 1.2 * curl);
+          rotWorld(`${f.id}.03.${S}`, axis[0], axis[1], axis[2], 0.95 * curl);
         }
       }
     } else if (id === 'marche') {
