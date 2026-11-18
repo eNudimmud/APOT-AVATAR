@@ -90,6 +90,14 @@
       <p class="hint small">Les curseurs bougent le squelette pour voir comment le corps et la tenue suivent. <b>Repos</b> revient à la pose en A.</p>
       <div class="poses" id="poses"></div>
       <label class="row" id="poseamprow" hidden><span>Amplitude</span><input id="poseamp" type="range" min="0" max="100" step="1" value="100"><output id="poseampv">100 %</output></label>
+      <h3 class="subh">Animations</h3>
+      <p class="hint small">Boucles d’environ 1 à 2 s, sur le même squelette. <b>Stop</b> revient au repos.</p>
+      <div class="poses" id="anims"></div>
+      <div class="animctrl" id="animctrl" hidden>
+        <button type="button" id="animplay">▶ Lecture</button>
+        <button type="button" id="animstop">⏹ Stop</button>
+        <label class="row" id="animspeedrow"><span>Vitesse</span><input id="animspeed" type="range" min="50" max="200" step="10" value="100"><output id="animspeedv">1.0×</output></label>
+      </div>
     </div>
     <div class="pane" data-pane="affichage" hidden>
       <div class="toggles">

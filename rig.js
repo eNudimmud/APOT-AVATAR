@@ -65,6 +65,21 @@ export const POSES = [
   { id: 'marche', label: 'Marche' },
 ];
 
+export const ANIMS = [
+  { id: 'marche', label: 'Marche', period: 1.2 },
+  { id: 'coucou', label: 'Coucou', period: 1.4 },
+  { id: 'saut', label: 'Saut', period: 1.6 },
+  { id: 'respiration', label: 'Respiration', period: 2.0 },
+  { id: 'danse', label: 'Danse', period: 1.2 },
+];
+
+const _axis = new THREE.Vector3();
+const _wq = new THREE.Quaternion();
+const _pq = new THREE.Quaternion();
+const _add = new THREE.Quaternion();
+function _smooth01(x) { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); }
+function _animPeriod(id) { return (ANIMS.find((a) => a.id === id) || { period: 1.2 }).period; }
+
 const PRIMARY_CHILD = {
   hips: 'spine', spine: 'chest', chest: 'neck', neck: 'head',
   'shoulder.L': 'upper_arm.L', 'upper_arm.L': 'forearm.L', 'forearm.L': 'hand.L', 'hand.L': 'middle.01.L',
@@ -102,6 +117,11 @@ export class RigSystem {
     this.testing = false;
     this.poseId = 'repos';
     this.poseAmt = 1;
+    this.animId = null;
+    this.animPlaying = false;
+    this.animSpeed = 1;
+    this.animT = 0;
+    this._animLast = null;
     this.outfitMode = 'ghost';
     this.onSelect = null;
     this.local = Object.fromEntries(JOINT_DEFS.map((j) => [j.name, new THREE.Vector3()]));
@@ -751,8 +771,7 @@ export class RigSystem {
     }
   }
 
-  resetPose() {
-    this.poseId = 'repos';
+  _resetBones() {
     if (!this._preview) return;
     const { bones, bind } = this._preview;
     for (const j of JOINT_DEFS) {
@@ -761,48 +780,67 @@ export class RigSystem {
     }
   }
 
+  resetPose() {
+    this._stopAnimFlags();
+    this.poseId = 'repos';
+    this._resetBones();
+  }
+
+  _rotWorld(name, ax, ay, az, angle) {
+    const b = this._preview && this._preview.bones[name];
+    if (!b || !angle) return;
+    _axis.set(ax, ay, az);
+    if (_axis.lengthSq() < 1e-12) return;
+    _axis.normalize();
+    b.updateWorldMatrix(true, false);
+    b.getWorldQuaternion(_wq);
+    _add.setFromAxisAngle(_axis, angle);
+    const target = _add.multiply(_wq);
+    if (b.parent) {
+      b.parent.getWorldQuaternion(_pq).invert();
+      b.quaternion.copy(_pq).multiply(target);
+    } else {
+      b.quaternion.copy(target);
+    }
+  }
+
+  _moveLocal(name, dx, dy, dz) {
+    const b = this._preview && this._preview.bones[name];
+    if (!b) return;
+    b.position.x += dx; b.position.y += dy; b.position.z += dz;
+  }
+
+  _stopAnimFlags() {
+    this.animId = null;
+    this.animPlaying = false;
+    this.animT = 0;
+    this._animLast = null;
+  }
+
   setPose(id, amt = 1) {
-    if (id === 'repos') { this.resetPose(); return; }
+    this._stopAnimFlags();
+    if (id === 'repos') { this.poseId = 'repos'; this._resetBones(); return; }
     if (!this.testing) this.buildPreview();
-    this.resetPose();
+    this._resetBones();
     this.poseId = id;
     this.poseAmt = amt;
-    const { bones } = this._preview;
     const a = amt;
-    const _axis = new THREE.Vector3();
-    const _wq = new THREE.Quaternion();
-    const _pq = new THREE.Quaternion();
-    const _add = new THREE.Quaternion();
-    const rotWorld = (name, ax, ay, az, angle) => {
-      const b = bones[name]; if (!b) return;
-      _axis.set(ax, ay, az).normalize();
-      b.updateWorldMatrix(true, false);
-      b.getWorldQuaternion(_wq);
-      _add.setFromAxisAngle(_axis, angle * a);
-      const target = _add.multiply(_wq);
-      if (b.parent) {
-        b.parent.getWorldQuaternion(_pq).invert();
-        b.quaternion.copy(_pq).multiply(target);
-      } else {
-        b.quaternion.copy(target);
-      }
-    };
     // World-space rotations (more stable than local axes after auto-aim).
     if (id === 'bras_leves') {
       // Raise forward/up (axis tilted in front of the coronal plane) so the arms
       // come up in front of the body, not in a flat T.
-      rotWorld('upper_arm.L', 0.45, 0, 1, 1.85);
-      rotWorld('upper_arm.R', 0.45, 0, -1, 1.85);
-      rotWorld('forearm.L', 0.45, 0, 1, 0.35);
-      rotWorld('forearm.R', 0.45, 0, -1, 0.35);
+      this._rotWorld('upper_arm.L', 0.45, 0, 1, 1.85 * a);
+      this._rotWorld('upper_arm.R', 0.45, 0, -1, 1.85 * a);
+      this._rotWorld('forearm.L', 0.45, 0, 1, 0.35 * a);
+      this._rotWorld('forearm.R', 0.45, 0, -1, 0.35 * a);
     } else if (id === 'accroupi') {
-      rotWorld('thigh.L', 1, 0, 0, -1.35); rotWorld('thigh.R', 1, 0, 0, -1.35);
-      rotWorld('shin.L', 1, 0, 0, 1.7); rotWorld('shin.R', 1, 0, 0, 1.7);
-      rotWorld('foot.L', 1, 0, 0, -0.35); rotWorld('foot.R', 1, 0, 0, -0.35);
-      rotWorld('spine', 1, 0, 0, 0.2);
+      this._rotWorld('thigh.L', 1, 0, 0, -1.35 * a); this._rotWorld('thigh.R', 1, 0, 0, -1.35 * a);
+      this._rotWorld('shin.L', 1, 0, 0, 1.7 * a); this._rotWorld('shin.R', 1, 0, 0, 1.7 * a);
+      this._rotWorld('foot.L', 1, 0, 0, -0.35 * a); this._rotWorld('foot.R', 1, 0, 0, -0.35 * a);
+      this._rotWorld('spine', 1, 0, 0, 0.2 * a);
     } else if (id === 'tete_tournee') {
-      rotWorld('neck', 0, 1, 0, 0.7);
-      rotWorld('head', 0, 1, 0, 0.45);
+      this._rotWorld('neck', 0, 1, 0, 0.7 * a);
+      this._rotWorld('head', 0, 1, 0, 0.45 * a);
     } else if (id === 'poing_ferme') {
       const pj = {};
       for (const j of JOINT_DEFS) pj[j.name] = this.localToWorld(j.name, new THREE.Vector3()).toArray();
@@ -811,23 +849,147 @@ export class RigSystem {
         if (!palm) continue;
         for (const f of FINGERS) {
           const axis = fingerAxis(pj, f.id, S, palm) || palm.axis;
-          const curl = f.id === 'thumb' ? 0.75 : 1;
-          rotWorld(`${f.id}.01.${S}`, axis[0], axis[1], axis[2], 0.85 * curl);
-          rotWorld(`${f.id}.02.${S}`, axis[0], axis[1], axis[2], 1.2 * curl);
-          rotWorld(`${f.id}.03.${S}`, axis[0], axis[1], axis[2], 0.95 * curl);
+          const curl = (f.id === 'thumb' ? 0.75 : 1) * a;
+          this._rotWorld(`${f.id}.01.${S}`, axis[0], axis[1], axis[2], 0.85 * curl);
+          this._rotWorld(`${f.id}.02.${S}`, axis[0], axis[1], axis[2], 1.2 * curl);
+          this._rotWorld(`${f.id}.03.${S}`, axis[0], axis[1], axis[2], 0.95 * curl);
         }
       }
     } else if (id === 'marche') {
-      rotWorld('thigh.L', 1, 0, 0, -0.7); rotWorld('thigh.R', 1, 0, 0, 0.55);
-      rotWorld('shin.L', 1, 0, 0, 0.45); rotWorld('shin.R', 1, 0, 0, 0.2);
-      rotWorld('upper_arm.L', 0, 0, 1, 0.5); rotWorld('upper_arm.R', 0, 0, 1, -0.55);
-      rotWorld('forearm.L', 0, 0, 1, -0.25); rotWorld('forearm.R', 0, 0, 1, 0.25);
+      this._rotWorld('thigh.L', 1, 0, 0, -0.7 * a); this._rotWorld('thigh.R', 1, 0, 0, 0.55 * a);
+      this._rotWorld('shin.L', 1, 0, 0, 0.45 * a); this._rotWorld('shin.R', 1, 0, 0, 0.2 * a);
+      this._rotWorld('upper_arm.L', 0, 0, 1, 0.5 * a); this._rotWorld('upper_arm.R', 0, 0, 1, -0.55 * a);
+      this._rotWorld('forearm.L', 0, 0, 1, -0.25 * a); this._rotWorld('forearm.R', 0, 0, 1, 0.25 * a);
+    }
+  }
+
+  playAnim(id) {
+    if (!ANIMS.some((a) => a.id === id)) return 0;
+    const ms = (this.testing && this._preview) ? (this._preview.ms || 0) : this.buildPreview();
+    this.poseId = 'repos';
+    this.animId = id;
+    this.animPlaying = true;
+    this.animT = 0;
+    this._animLast = null;
+    this._applyAnim(id, 0);
+    return ms;
+  }
+  pauseAnim() { this.animPlaying = false; this._animLast = null; }
+  resumeAnim() {
+    if (!this.animId) return;
+    if (!this.testing) this.buildPreview();
+    this.animPlaying = true;
+    this._animLast = null;
+  }
+  stopAnim() {
+    this._stopAnimFlags();
+    this.poseId = 'repos';
+    this._resetBones();
+  }
+  setAnimSpeed(s) { this.animSpeed = Math.min(2, Math.max(0.5, +s || 1)); }
+  seekAnim(u) {
+    if (!this.animId || !this._preview) return;
+    const x = ((u % 1) + 1) % 1;
+    this.animT = x * _animPeriod(this.animId);
+    this._applyAnim(this.animId, x);
+  }
+  tickAnim(now = performance.now()) {
+    if (!this.animId || !this.animPlaying || !this._preview) return;
+    if (this._animLast == null) this._animLast = now;
+    const dt = Math.min(0.05, (now - this._animLast) / 1000) * this.animSpeed;
+    this._animLast = now;
+    this.animT += dt;
+    const period = _animPeriod(this.animId);
+    this._applyAnim(this.animId, (this.animT / period) % 1);
+  }
+
+  _applyAnim(id, u) {
+    if (!this._preview) return;
+    this._resetBones();
+    const tau = Math.PI * 2;
+    const s = Math.sin(tau * u);
+    const c = Math.cos(tau * u);
+    const s2 = Math.sin(tau * 2 * u);
+    if (id === 'marche') {
+      this._moveLocal('hips', 0, 0.008 * Math.abs(s), 0);
+      this._rotWorld('hips', 0, 1, 0, 0.12 * s);
+      this._rotWorld('thigh.L', 1, 0, 0, -0.7 * s);
+      this._rotWorld('thigh.R', 1, 0, 0, 0.7 * s);
+      this._rotWorld('shin.L', 1, 0, 0, 0.25 + 0.45 * Math.max(0, s));
+      this._rotWorld('shin.R', 1, 0, 0, 0.25 + 0.45 * Math.max(0, -s));
+      this._rotWorld('foot.L', 1, 0, 0, -0.15 * s);
+      this._rotWorld('foot.R', 1, 0, 0, 0.15 * s);
+      this._rotWorld('upper_arm.L', 1, 0, 0, 0.55 * s);
+      this._rotWorld('upper_arm.R', 1, 0, 0, -0.55 * s);
+      this._rotWorld('forearm.L', 1, 0, 0, 0.25);
+      this._rotWorld('forearm.R', 1, 0, 0, 0.25);
+    } else if (id === 'coucou') {
+      const w = Math.sin(tau * 2 * u);
+      this._rotWorld('upper_arm.R', 0.35, 0, -1, 1.7);
+      this._rotWorld('forearm.R', 0.2, 0, -1, 0.35);
+      this._rotWorld('forearm.R', 0, 0, 1, 0.85 * w);
+      this._rotWorld('hand.R', 0, 0, 1, 0.4 * w);
+      this._rotWorld('spine', 0, 1, 0, -0.08);
+      this._rotWorld('head', 0, 1, 0, 0.18);
+    } else if (id === 'saut') {
+      let squat, hop, arms;
+      if (u < 0.22) {
+        const k = _smooth01(u / 0.22);
+        squat = k; hop = 0; arms = 0.15 * k;
+      } else if (u < 0.38) {
+        const k = _smooth01((u - 0.22) / 0.16);
+        squat = 1 - k; hop = 0.07 * k; arms = 0.15 + 0.55 * k;
+      } else if (u < 0.68) {
+        const k = (u - 0.38) / 0.30;
+        hop = 0.07 * Math.cos(k * Math.PI * 0.5);
+        squat = 0.08; arms = 0.7 * (hop / 0.07);
+      } else {
+        const k = (u - 0.68) / 0.32;
+        hop = 0; squat = 0.65 * Math.sin(Math.PI * k); arms = 0.2 * (1 - k);
+      }
+      this._moveLocal('hips', 0, hop - 0.03 * squat, 0);
+      this._rotWorld('thigh.L', 1, 0, 0, -1.2 * squat);
+      this._rotWorld('thigh.R', 1, 0, 0, -1.2 * squat);
+      this._rotWorld('shin.L', 1, 0, 0, 1.5 * squat);
+      this._rotWorld('shin.R', 1, 0, 0, 1.5 * squat);
+      this._rotWorld('foot.L', 1, 0, 0, -0.2 * squat);
+      this._rotWorld('foot.R', 1, 0, 0, -0.2 * squat);
+      this._rotWorld('spine', 1, 0, 0, 0.25 * squat);
+      this._rotWorld('upper_arm.L', 0.4, 0, 1, 0.9 * arms);
+      this._rotWorld('upper_arm.R', 0.4, 0, -1, 0.9 * arms);
+    } else if (id === 'respiration') {
+      this._moveLocal('hips', 0, 0.004 * s, 0);
+      this._rotWorld('spine', 1, 0, 0, -0.06 * s);
+      this._rotWorld('chest', 1, 0, 0, -0.05 * s);
+      this._moveLocal('chest', 0, 0.006 * s, 0);
+      this._rotWorld('neck', 0, 1, 0, 0.22 * c);
+      this._rotWorld('head', 0, 1, 0, 0.12 * c);
+      this._rotWorld('head', 1, 0, 0, 0.06 * s2);
+      this._rotWorld('upper_arm.L', 0, 0, 1, 0.04 * s);
+      this._rotWorld('upper_arm.R', 0, 0, -1, 0.04 * s);
+    } else if (id === 'danse') {
+      const bob = 0.25 * Math.abs(s2);
+      this._moveLocal('hips', 0.02 * s, 0.016 * Math.abs(s2), 0);
+      this._rotWorld('hips', 0, 0, 1, -0.22 * s);
+      this._rotWorld('spine', 0, 1, 0, 0.2 * s);
+      this._rotWorld('chest', 0, 0, 1, -0.12 * s);
+      this._rotWorld('thigh.L', 1, 0, 0, -0.25 - bob);
+      this._rotWorld('thigh.R', 1, 0, 0, -0.25 - bob);
+      this._rotWorld('shin.L', 1, 0, 0, 0.35 + bob);
+      this._rotWorld('shin.R', 1, 0, 0, 0.35 + bob);
+      this._rotWorld('upper_arm.L', 0.3, 0, 1, 0.7 + 0.45 * s);
+      this._rotWorld('upper_arm.R', 0.3, 0, -1, 0.7 - 0.45 * s);
+      this._rotWorld('forearm.L', 0, 0, 1, 0.35);
+      this._rotWorld('forearm.R', 0, 0, -1, 0.35);
+      this._rotWorld('head', 0, 0, 1, -0.1 * s);
     }
   }
 
   exitTester() {
     if (!this.testing && !this._preview) return;
-    this.resetPose();
+    this._stopAnimFlags();
+    this._resetBones();
+    this.poseId = 'repos';
     this._teardownPreview(true);
   }
   _teardownPreview(restore = true) {

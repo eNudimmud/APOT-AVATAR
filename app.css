@@ -70,6 +70,12 @@ dialog h2 { margin:0 0 6px; font-size:20px; }
 .jlist button { min-width:96px; }
 .jlist button.on, .jgroups button.on, .jsub button.on, .poses button.on { background:var(--on); }
 #poseamprow { margin-top:4px; }
+#poseamprow[hidden], #animspeedrow[hidden] { display:none; }
+.animctrl { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; align-items:center; }
+.animctrl[hidden] { display:none; }
+.animctrl button { flex:1 1 auto; min-width:96px; min-height:48px; padding:0 10px; font-size:14px; }
+.animctrl .row { flex:1 1 100%; }
+.animctrl button.on { background:var(--on); }
 @media (max-width: 420px) {
   #tabs button span { font-size:11px; }
   #tabs button { min-height:52px; font-size:16px; }

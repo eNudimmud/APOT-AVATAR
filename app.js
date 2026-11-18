@@ -6,7 +6,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { Sculptable, f32ToB64, b64ToF32 } from './sculpt.js';
-import { RigSystem, JOINT_DEFS, GROUPS, POSES } from './rig.js';
+import { RigSystem, JOINT_DEFS, GROUPS, POSES, ANIMS } from './rig.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -451,6 +451,7 @@ $('#resetall').addEventListener('click', () => {
   if (!confirm('Revenir à l’ajustement V2 (celui que tu as validé) ?')) return;
   pushUndo();
   if (rig && rig.testing) rig.exitTester();
+  refreshPoseBtns();
   applyDefaultFit(false);
   body.geometry.attributes.color.array.fill(1); body.geometry.attributes.color.needsUpdate = true; $('#penres').textContent = '';
   saveLocal();
@@ -460,6 +461,7 @@ $('#resetmeshy').addEventListener('click', () => {
   if (!confirm('Remettre la tenue telle que Meshy l’a livrée, sans tes ajustements ?')) return;
   pushUndo();
   if (rig && rig.testing) rig.exitTester();
+  refreshPoseBtns();
   sculpt.setPositions(sculpt.rest); outfit.geometry.boundsTree.refit(); outfit.geometry.computeBoundingSphere();
   setTf(meshyTf || startTf);
   if (rig) rig.estimate();
@@ -476,6 +478,7 @@ $('#openfile').addEventListener('change', async (e) => {
     const s = JSON.parse(await f.text());
     pushUndo();
     if (rig && rig.testing) rig.exitTester();
+    refreshPoseBtns();
     applyFitState(s);
     saveLocal();
     $('#savedlg').close();
@@ -512,6 +515,27 @@ function buildRigUI() {
     b.addEventListener('click', () => applyPose(p.id));
     poses.appendChild(b);
   }
+  const anims = $('#anims'); anims.innerHTML = '';
+  for (const a of ANIMS) {
+    const b = document.createElement('button'); b.textContent = a.label; b.dataset.anim = a.id;
+    b.addEventListener('click', () => applyAnim(a.id));
+    anims.appendChild(b);
+  }
+  $('#animplay').addEventListener('click', () => {
+    if (!rig.animId) return;
+    if (rig.animPlaying) rig.pauseAnim(); else rig.resumeAnim();
+    refreshPoseBtns();
+  });
+  $('#animstop').addEventListener('click', () => {
+    rig.stopAnim();
+    refreshPoseBtns();
+    toast('Retour à la pose de repos');
+  });
+  $('#animspeed').addEventListener('input', () => {
+    const v = +$('#animspeed').value / 100;
+    $('#animspeedv').textContent = v.toFixed(1) + '×';
+    rig.setAnimSpeed(v);
+  });
   $('#rigsym').addEventListener('click', (e) => { rig.sym = !rig.sym; e.currentTarget.classList.toggle('on', rig.sym); });
   $('#rigoutfit').addEventListener('click', (e) => {
     rig.setOutfitMode(rig.outfitMode === 'ghost' ? 'hidden' : 'ghost');
@@ -585,11 +609,20 @@ function refreshDepthSlider(sync = true) {
   out.textContent = ((+inp.value - (r.min + r.max) / 2) * 100).toFixed(1) + ' cm';
 }
 function refreshPoseBtns() {
-  $$('#poses button').forEach((b) => b.classList.toggle('on', rig && rig.poseId === b.dataset.pose));
-  const show = rig && rig.testing && rig.poseId !== 'repos';
+  $$('#poses button').forEach((b) => b.classList.toggle('on', rig && !rig.animId && rig.poseId === b.dataset.pose));
+  const show = rig && rig.testing && !rig.animId && rig.poseId !== 'repos';
   $('#poseamprow').hidden = !show;
+  $$('#anims button').forEach((b) => b.classList.toggle('on', rig && rig.animId === b.dataset.anim));
+  const animOn = !!(rig && rig.animId);
+  $('#animctrl').hidden = !animOn;
+  const play = $('#animplay');
+  if (play) {
+    play.textContent = (rig && rig.animPlaying) ? '⏸ Pause' : '▶ Lecture';
+    play.classList.toggle('on', !!(rig && rig.animPlaying));
+  }
 }
 function applyPose(id) {
+  if (rig.animId) rig.stopAnim();
   if (id === 'repos') {
     rig.resetPose();
     refreshPoseBtns();
@@ -600,6 +633,12 @@ function applyPose(id) {
   rig.setPose(id, +$('#poseamp').value / 100);
   refreshPoseBtns();
   toast(`Aperçu « ${POSES.find((p) => p.id === id).label} » (${ms} ms)`);
+}
+function applyAnim(id) {
+  const ms = rig.playAnim(id);
+  refreshPoseBtns();
+  const label = (ANIMS.find((a) => a.id === id) || { label: id }).label;
+  toast(`Animation « ${label} » (${ms} ms)`);
 }
 
 // keep Apot centred in the part of the screen the panel does not cover
@@ -614,6 +653,6 @@ function updateViewOffset() {
   camera.setViewOffset(W, H, Math.round(x), Math.round(y), W, H);
 }
 // ---------- loop
-renderer.setAnimationLoop(() => { updateViewOffset(); strokeFrame(); if (rig && rig.testing) rig.updateTestingMarkers(); controls.update(); renderer.render(scene, camera); });
+renderer.setAnimationLoop(() => { updateViewOffset(); strokeFrame(); if (rig && rig.testing) { rig.tickAnim(); rig.updateTestingMarkers(); } controls.update(); renderer.render(scene, camera); });
 addEventListener('error', (e) => app.errors.push(String(e.message)));
 init().catch((err) => { console.error(err); $('#loadmsg').textContent = 'Erreur de chargement : ' + err.message; app.errors.push(String(err)); });
