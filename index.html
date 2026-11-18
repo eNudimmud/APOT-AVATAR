@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#16181d">
+<meta name="robots" content="noindex, nofollow">
+<title>Apot · Essayage de la tenue</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="app.css">
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/build/three.module.js",
+  "three/addons/": "./vendor/three/examples/jsm/",
+  "three-mesh-bvh": "./vendor/three-mesh-bvh/index.module.js"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="c"></canvas>
+
+  <nav id="tabs">
+    <button data-mode="vue" class="on">👁<span>Vue</span></button>
+    <button data-mode="placer">✋<span>Placer</span></button>
+    <button data-mode="sculpter">🖌<span>Sculpter</span></button>
+    <button data-mode="affichage">◐<span>Affichage</span></button>
+  </nav>
+
+  <div id="views">
+    <button data-view="face">Face</button>
+    <button data-view="profil">Profil</button>
+    <button data-view="dos">Dos</button>
+    <button data-view="reset" title="Vue de départ">⟲</button>
+  </div>
+
+  <div id="hist">
+    <button id="undo" title="Annuler">↶</button>
+    <button id="redo" title="Rétablir">↷</button>
+    <button id="save" class="accent" title="Enregistrer">💾</button>
+  </div>
+
+  <section id="panel">
+    <button id="fold" title="Replier">▾</button>
+
+    <div class="pane" data-pane="vue">
+      <p class="hint"><b>1 doigt</b> : tourner · <b>pincer</b> : zoom · <b>2 doigts</b> : déplacer la vue.</p>
+      <p class="hint">Choisis <b>Placer</b> pour bouger la tenue, <b>Sculpter</b> pour la déformer.</p>
+    </div>
+
+    <div class="pane" data-pane="placer" hidden>
+      <div class="seg" id="tfseg">
+        <button data-g="pos" class="on">Position</button><button data-g="rot">Rotation</button><button data-g="scale">Taille</button>
+      </div>
+      <div id="sliders"></div>
+      <button id="tfreset" class="wide ghost">Remettre le placement de départ</button>
+    </div>
+
+    <div class="pane" data-pane="sculpter" hidden>
+      <div class="seg tools" id="tools">
+        <button data-tool="gonfler" class="on">Gonfler</button><button data-tool="tirer">Tirer</button><button data-tool="pousser">Pousser</button><button data-tool="lisser">Lisser</button>
+      </div>
+      <label class="row"><span>Taille</span><input id="bsize" type="range" min="0.5" max="15" step="0.1" value="4"><output id="bsizev">4 cm</output></label>
+      <label class="row"><span>Force</span><input id="bstr" type="range" min="0.05" max="1" step="0.01" value="0.5"><output id="bstrv">50 %</output></label>
+      <div class="toggles">
+        <button id="sym" class="tog on">⇋ Symétrie X</button>
+        <button id="lockcam" class="tog">🔒 Caméra</button>
+      </div>
+      <p class="hint small">Pose le doigt <b>sur la tenue</b> pour sculpter, à côté pour tourner. « 🔒 Caméra » : le doigt ne fait plus tourner.</p>
+    </div>
+
+    <div class="pane" data-pane="affichage" hidden>
+      <div class="toggles">
+        <button id="showbody" class="tog on">Corps visible</button>
+        <button id="showoutfit" class="tog on">Tenue visible</button>
+      </div>
+      <label class="row"><span>Tenue</span><input id="opac" type="range" min="0.1" max="1" step="0.01" value="1"><output id="opacv">100 %</output></label>
+      <button id="pen" class="wide">🔴 Montrer les zones qui traversent</button>
+      <label class="row chk"><input id="penauto" type="checkbox"> <span>Recalculer après chaque geste</span></label>
+      <p id="penres" class="hint small"></p>
+    </div>
+  </section>
+
+  <dialog id="savedlg">
+    <h2>Enregistrer</h2>
+    <p id="savestatus" class="hint small"></p>
+    <button id="dlglb" class="wide accent">⬇ Télécharger la tenue (.glb)</button>
+    <button id="dljson" class="wide">⬇ Télécharger l'état (.json, pour Blender HD)</button>
+    <button id="resetall" class="wide danger">Tout recommencer (efface la sauvegarde)</button>
+    <button id="closedlg" class="wide ghost">Fermer</button>
+  </dialog>
+
+  <div id="toast" hidden></div>
+  <div id="loading"><div class="spin"></div><p id="loadmsg">Chargement d'Apot…</p></div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
